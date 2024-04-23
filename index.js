@@ -28,26 +28,27 @@ const upload = multer({ storage: storage });
 // PostgreSQL connection settings
 const pool = new Pool({
   user: 'postgres',
-  host: 'localhost',
-  database: 'suppression-db',
+  host: 'localhost', 
+  database: 'supppression-db',
   password: 'root',
   port: 5432
 });
 
 // Function to check the database for a match based on left_3 and left_4
-async function checkDatabase(left3, left4) {
+async function checkDatabase(left3, left4, clientCode) {
   const client = await pool.connect();
   try {
-    console.log(`Checking for left_3: ${left3}, left_4: ${left4}`);
-    const result = await client.query(
-      `SELECT EXISTS (
+    console.log(`Checking for left_3: ${left3}, left_4: ${left4}, clientCode: ${clientCode}`);
+    const query = `
+      SELECT EXISTS (
         SELECT 1
         FROM campaigns
         WHERE 
           left_3 = $1 AND
-          left_4 = $2
-      )`, [left3, left4]
-    );
+          left_4 = $2 AND
+          client = $3
+      )`;
+    const result = await client.query(query, [left3, left4, clientCode]);
     return result.rows[0].exists;
   } finally {
     client.release();
@@ -55,54 +56,53 @@ async function checkDatabase(left3, left4) {
 }
 
 // Read the Excel file, calculate left_3 and left_4, check the database, and add status
-async function processFile(filePath) {
+async function processFile(filePath, clientCode) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(filePath);
   const worksheet = workbook.getWorksheet(1);
 
-  const headerRow = worksheet.getRow(1);
-
+  // Columns as per Excel headers
   let companyIndex, firstNameIndex, lastNameIndex, emailIndex, phoneIndex;
+  const headerRow = worksheet.getRow(1);
   headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-    if (cell.value === 'Company Name') companyIndex = colNumber;
-    else if (cell.value === 'First Name') firstNameIndex = colNumber;
-    else if (cell.value === 'Last Name') lastNameIndex = colNumber;
-    else if (cell.value === 'Email ID') emailIndex = colNumber;
-    else if (cell.value === 'Phone Number') phoneIndex = colNumber;
+    switch(cell.value) {
+      case 'Company Name':
+        companyIndex = colNumber;
+        break;
+      case 'First Name':
+        firstNameIndex = colNumber;
+        break;
+      case 'Last Name':
+        lastNameIndex = colNumber;
+        break;
+      case 'Email ID':
+        emailIndex = colNumber;
+        break;
+      case 'Phone Number':
+        phoneIndex = colNumber;
+        break;
+    }
   });
 
-  console.log({companyIndex, firstNameIndex, lastNameIndex, emailIndex, phoneIndex});
-
-  if (!companyIndex || !firstNameIndex || !lastNameIndex || !emailIndex || !phoneIndex) {
-    throw new Error('One or more required headers not found in the Excel sheet.');
-  }
-
   const statusColumn = worksheet.getColumn(worksheet.columnCount + 1);
-  statusColumn.header = 'Status';
+  statusColumn.header = 'Match Status';
+
+  const clientCodeStatusColumn = worksheet.getColumn(worksheet.columnCount + 2);
+  clientCodeStatusColumn.header = 'Client Code Status';
 
   for (let i = 2; i <= worksheet.rowCount; i++) {
     const row = worksheet.getRow(i);
-    const firstName = row.getCell(firstNameIndex).value;
-    const lastName = row.getCell(lastNameIndex).value;
-    const companyName = row.getCell(companyIndex).value;
+    const firstName = normalizeString(row.getCell(firstNameIndex).value);
+    const lastName = normalizeString(row.getCell(lastNameIndex).value);
+    const companyName = normalizeString(row.getCell(companyIndex).value);
 
-    // Skip processing for rows where critical cells are empty
-    if (!firstName && !lastName && !companyName) {
-      console.log(`Skipping empty row ${i}.`);
-      continue;
-    }
+    const left3 = `${firstName.substring(0, 3)}${lastName.substring(0, 3)}${companyName.substring(0, 3)}`;
+    const left4 = `${firstName.substring(0, 4)}${lastName.substring(0, 4)}${companyName.substring(0, 4)}`;
 
-    const normalizedFirstName = normalizeString(firstName);
-    const normalizedLastName = normalizeString(lastName);
-    const normalizedCompanyName = normalizeString(companyName);
+    const databaseMatch = await checkDatabase(left3, left4, clientCode);
+    row.getCell(statusColumn.number).value = databaseMatch ? 'Match' : 'Unmatch';
+    row.getCell(clientCodeStatusColumn.number).value = databaseMatch ? 'Match' : 'Unmatch'; // Now reflects database check including client code
 
-    const left3 = `${normalizedFirstName.substring(0, 3)}${normalizedLastName.substring(0, 3)}${normalizedCompanyName.substring(0, 3)}`;
-    const left4 = `${normalizedFirstName.substring(0, 4)}${normalizedLastName.substring(0, 4)}${normalizedCompanyName.substring(0, 4)}`;
-
-    console.log(`Row ${i} - Checking for left_3: ${left3}, left_4: ${left4}`);
-
-    const status = await checkDatabase(left3, left4) ? 'Match' : 'Unmatch';
-    row.getCell(worksheet.columnCount).value = status;
     row.commit();
   }
 
@@ -117,16 +117,18 @@ app.get('/', (req, res) => {
   res.render('upload');
 });
 
+
 app.post('/upload', upload.single('excelFile'), async (req, res) => {
   if (!req.file) {
     return res.status(400).send('No file uploaded.');
   }
+  const clientCode = req.body.clientCode; // Capture the client code from the form
   try {
-    const newFilePath = await processFile(req.file.path);
+    const newFilePath = await processFile(req.file.path, clientCode);
     res.download(newFilePath, (err) => {
       if (err) throw err;
-      fs.unlinkSync(newFilePath); // Optionally delete the file after sending
-      fs.unlinkSync(req.file.path); // Delete the uploaded file as well
+      fs.unlinkSync(newFilePath);
+      fs.unlinkSync(req.file.path);
     });
   } catch (error) {
     console.error('Error processing file:', error);
