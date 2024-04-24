@@ -40,20 +40,38 @@ async function checkDatabase(left3, left4, clientCode) {
   try {
     console.log(`Checking for left_3: ${left3}, left_4: ${left4}, clientCode: ${clientCode}`);
     const query = `
-      SELECT EXISTS (
+      SELECT date_, EXISTS (
         SELECT 1
         FROM campaigns
         WHERE 
           left_3 = $1 AND
           left_4 = $2 AND
           client = $3
-      )`;
+      ) AS match_found
+      FROM campaigns
+      WHERE 
+          left_3 = $1 AND
+          left_4 = $2 AND
+          client = $3
+      LIMIT 1;`;  // Fetching the first match
     const result = await client.query(query, [left3, left4, clientCode]);
-    return result.rows[0].exists;
+    const row = result.rows[0];
+    if (row) {
+      const dateFromDb = new Date(row.date_);
+      const currentDate = new Date();
+      const oneYearAgo = new Date(currentDate.setFullYear(currentDate.getFullYear() - 1));
+
+      return {
+        exists: row.match_found,
+        dateStatus: dateFromDb < oneYearAgo ? 'Fresh Lead' : 'Already in Database'
+      };
+    }
+    return { exists: false, dateStatus: 'No Record Found' }; // No record matched
   } finally {
     client.release();
   }
 }
+
 
 // Read the Excel file, calculate left_3 and left_4, check the database, and add status
 async function processFile(filePath, clientCode) {
@@ -90,6 +108,9 @@ async function processFile(filePath, clientCode) {
   const clientCodeStatusColumn = worksheet.getColumn(worksheet.columnCount + 2);
   clientCodeStatusColumn.header = 'Client Code Status';
 
+  const dateStatusColumn = worksheet.getColumn(worksheet.columnCount + 3);
+  dateStatusColumn.header = 'Date Status';
+
   for (let i = 2; i <= worksheet.rowCount; i++) {
     const row = worksheet.getRow(i);
     const firstName = normalizeString(row.getCell(firstNameIndex).value);
@@ -99,9 +120,10 @@ async function processFile(filePath, clientCode) {
     const left3 = `${firstName.substring(0, 3)}${lastName.substring(0, 3)}${companyName.substring(0, 3)}`;
     const left4 = `${firstName.substring(0, 4)}${lastName.substring(0, 4)}${companyName.substring(0, 4)}`;
 
-    const databaseMatch = await checkDatabase(left3, left4, clientCode);
-    row.getCell(statusColumn.number).value = databaseMatch ? 'Match' : 'Unmatch';
-    row.getCell(clientCodeStatusColumn.number).value = databaseMatch ? 'Match' : 'Unmatch'; // Now reflects database check including client code
+    const dbResult = await checkDatabase(left3, left4, clientCode);
+    row.getCell(statusColumn.number).value = dbResult.exists ? 'Match' : 'Unmatch';
+    row.getCell(clientCodeStatusColumn.number).value = dbResult.exists ? 'Match' : 'Unmatch';
+    row.getCell(dateStatusColumn.number).value = dbResult.dateStatus;
 
     row.commit();
   }
@@ -110,6 +132,7 @@ async function processFile(filePath, clientCode) {
   await workbook.xlsx.writeFile(newFilePath);
   return newFilePath;
 }
+
 
 app.set('view engine', 'ejs');
 
