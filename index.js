@@ -28,14 +28,14 @@ const upload = multer({ storage: storage });
 // PostgreSQL connection settings
 const pool = new Pool({
   user: 'postgres',
-  host: 'localhost', 
+  host: 'localhost',
   database: 'supppression-db',
   password: 'root',
   port: 5432
 });
 
 // Function to check the database for a match based on left_3 and left_4
-async function checkDatabase(left3, left4, clientCode) {
+async function checkDatabase(left3, left4, clientCode, dateFilter) {
   const client = await pool.connect();
   try {
     console.log(`Checking for left_3: ${left3}, left_4: ${left4}, clientCode: ${clientCode}`);
@@ -53,17 +53,17 @@ async function checkDatabase(left3, left4, clientCode) {
           left_3 = $1 AND
           left_4 = $2 AND
           client = $3
-      LIMIT 1;`;  // Fetching the first match
+      LIMIT 1;`;
     const result = await client.query(query, [left3, left4, clientCode]);
     const row = result.rows[0];
     if (row) {
       const dateFromDb = new Date(row.date_);
       const currentDate = new Date();
-      const oneYearAgo = new Date(currentDate.setFullYear(currentDate.getFullYear() - 1));
+      const monthsAgoDate = new Date(currentDate.setMonth(currentDate.getMonth() - dateFilter));
 
       return {
         exists: row.match_found,
-        dateStatus: dateFromDb < oneYearAgo ? 'Fresh Lead' : 'Already in Database'
+        dateStatus: dateFromDb < monthsAgoDate ? 'Fresh Lead' : 'Already in Database'
       };
     }
     return { exists: false, dateStatus: 'No Record Found' }; // No record matched
@@ -72,9 +72,8 @@ async function checkDatabase(left3, left4, clientCode) {
   }
 }
 
-
 // Read the Excel file, calculate left_3 and left_4, check the database, and add status
-async function processFile(filePath, clientCode) {
+async function processFile(filePath, clientCode, dateFilter) { // Include dateFilter as a parameter
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(filePath);
   const worksheet = workbook.getWorksheet(1);
@@ -120,7 +119,7 @@ async function processFile(filePath, clientCode) {
     const left3 = `${firstName.substring(0, 3)}${lastName.substring(0, 3)}${companyName.substring(0, 3)}`;
     const left4 = `${firstName.substring(0, 4)}${lastName.substring(0, 4)}${companyName.substring(0, 4)}`;
 
-    const dbResult = await checkDatabase(left3, left4, clientCode);
+    const dbResult = await checkDatabase(left3, left4, clientCode, dateFilter);
     row.getCell(statusColumn.number).value = dbResult.exists ? 'Match' : 'Unmatch';
     row.getCell(clientCodeStatusColumn.number).value = dbResult.exists ? 'Match' : 'Unmatch';
     row.getCell(dateStatusColumn.number).value = dbResult.dateStatus;
@@ -133,21 +132,20 @@ async function processFile(filePath, clientCode) {
   return newFilePath;
 }
 
-
 app.set('view engine', 'ejs');
 
 app.get('/', (req, res) => {
   res.render('upload');
 });
 
-
 app.post('/upload', upload.single('excelFile'), async (req, res) => {
   if (!req.file) {
     return res.status(400).send('No file uploaded.');
   }
   const clientCode = req.body.clientCode; // Capture the client code from the form
+  const dateFilter = parseInt(req.body.dateFilter); // Capture the date filter from the form
   try {
-    const newFilePath = await processFile(req.file.path, clientCode);
+    const newFilePath = await processFile(req.file.path, clientCode, dateFilter);
     res.download(newFilePath, (err) => {
       if (err) throw err;
       fs.unlinkSync(newFilePath);
