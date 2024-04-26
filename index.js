@@ -38,7 +38,7 @@ const pool = new Pool({
 async function checkDatabase(left3, left4, clientCode, dateFilter) {
   const client = await pool.connect();
   try {
-    console.log(`Checking for left_3: ${left3}, left_4: ${left4}, clientCode: ${clientCode}`);
+    // console.log(`Checking for left_3: ${left3}, left_4: ${left4}, clientCode: ${clientCode}`);
     const query = `
       SELECT date_, EXISTS (
         SELECT 1
@@ -63,10 +63,10 @@ async function checkDatabase(left3, left4, clientCode, dateFilter) {
 
       return {
         exists: row.match_found,
-        dateStatus: dateFromDb < monthsAgoDate ? 'Fresh Lead' : 'Already in Database'
+        dateStatus: dateFromDb < monthsAgoDate ? 'Suppression Cleared' : 'Suppression Cleared'
       };
     }
-    return { exists: false, dateStatus: 'No Record Found' }; // No record matched
+    return { exists: false, dateStatus: 'Fresh Lead GTG' }; // No record matched
   } finally {
     client.release();
   }
