@@ -63,7 +63,7 @@ async function checkDatabase(left3, left4, clientCode, dateFilter) {
 
       return {
         exists: row.match_found,
-        dateStatus: dateFromDb < monthsAgoDate ? 'Suppression Cleared' : 'Suppression Cleared'
+        dateStatus: dateFromDb < monthsAgoDate ? 'Suppression Cleared' : 'Still Suppressed'
       };
     }
     return { exists: false, dateStatus: 'Fresh Lead GTG' }; // No record matched
